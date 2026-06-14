@@ -30,11 +30,15 @@ struct WheelState {
     animating: bool,
     /// `true` quando a roda foi acionada via Ctrl+Tab (fecha ao soltar o Ctrl).
     ctrl_cycling: bool,
+    /// Timer de inatividade que oculta a roda sozinha (modo scroll/manual).
+    hide_source: Option<glib::SourceId>,
     items: Vec<(gtk::Button, adw::TabPage)>,
 }
 
 /// Fração interpolada por frame (ease-out): quanto maior, mais rápido o giro.
 const EASE: f64 = 0.20;
+/// Tempo de inatividade (ms) até a roda se ocultar sozinha.
+const HIDE_MS: u64 = 1800;
 
 type State = Rc<RefCell<WheelState>>;
 
@@ -66,13 +70,14 @@ pub fn attach(
         target: 0.0,
         animating: false,
         ctrl_cycling: false,
+        hide_source: None,
         items: Vec::new(),
     }));
 
     // Scroll gira a roda e seleciona a aba central.
     let scroll = gtk::EventControllerScroll::new(gtk::EventControllerScrollFlags::VERTICAL);
     scroll.connect_scroll(glib::clone!(
-        #[strong] state, #[weak] fixed, #[weak] tab_view,
+        #[strong] state, #[weak] fixed, #[weak] tab_view, #[weak] revealer,
         #[upgrade_or] glib::Propagation::Proceed,
         move |_, _dx, dy| {
             let dir = if dy > 0.0 { 1.0 } else if dy < 0.0 { -1.0 } else { 0.0 };
@@ -83,11 +88,12 @@ pub fn attach(
                     return glib::Propagation::Proceed;
                 }
                 // Ao rolar com o mouse, a roda passa ao modo manual (não fecha
-                // sozinha ao soltar o Ctrl).
+                // ao soltar o Ctrl) e passa a contar o timer de auto-ocultar.
                 st.ctrl_cycling = false;
                 st.target = (st.target + dir).clamp(0.0, (n - 1) as f64);
             }
             start_animation(&fixed, &state, &tab_view);
+            schedule_hide(&state, &revealer);
             glib::Propagation::Stop
         }
     ));
@@ -180,19 +186,41 @@ fn open_wheel(fixed: &gtk::Fixed, state: &State, tab_view: &adw::TabView, reveal
     }
 }
 
-/// Fecha a roda e zera o modo de ciclagem por Ctrl.
+/// Fecha a roda, cancela o timer de auto-ocultar e zera a ciclagem por Ctrl.
 fn close_wheel(state: &State, revealer: &gtk::Revealer) {
+    if let Some(id) = state.borrow_mut().hide_source.take() {
+        id.remove();
+    }
     revealer.set_reveal_child(false);
     state.borrow_mut().ctrl_cycling = false;
 }
 
-/// Alterna a roda no modo manual (permanece aberta até clicar/alternar de novo).
+/// (Re)agenda o fechamento automático da roda após `HIDE_MS` de inatividade.
+fn schedule_hide(state: &State, revealer: &gtk::Revealer) {
+    if let Some(id) = state.borrow_mut().hide_source.take() {
+        id.remove();
+    }
+    let id = glib::timeout_add_local_once(
+        std::time::Duration::from_millis(HIDE_MS),
+        glib::clone!(
+            #[strong] state, #[weak] revealer,
+            move || {
+                state.borrow_mut().hide_source = None;
+                close_wheel(&state, &revealer);
+            }
+        ),
+    );
+    state.borrow_mut().hide_source = Some(id);
+}
+
+/// Alterna a roda no modo manual (auto-oculta após inatividade).
 fn toggle_wheel(fixed: &gtk::Fixed, state: &State, tab_view: &adw::TabView, revealer: &gtk::Revealer) {
     if revealer.reveals_child() {
         close_wheel(state, revealer);
     } else {
         state.borrow_mut().ctrl_cycling = false;
         open_wheel(fixed, state, tab_view, revealer);
+        schedule_hide(state, revealer);
     }
 }
 
@@ -207,6 +235,10 @@ fn cycle_wheel(
     open_wheel(fixed, state, tab_view, revealer);
     {
         let mut st = state.borrow_mut();
+        // Em modo Ctrl+Tab o fechamento é por soltar o Ctrl: cancela o timer.
+        if let Some(id) = st.hide_source.take() {
+            id.remove();
+        }
         st.ctrl_cycling = true;
         let n = st.items.len();
         if n == 0 {

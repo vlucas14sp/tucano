@@ -4,7 +4,7 @@ use webkit::prelude::*;
 use webkit::WebView;
 
 /// Página inicial / motor de busca padrão.
-const HOME: &str = "https://google.com";
+const HOME: &str = "https://www.google.com";
 
 /// Monta a janela principal e a primeira aba.
 pub fn build_window(app: &adw::Application) {
@@ -381,5 +381,5 @@ fn normalize_url(input: &str) -> String {
         return format!("https://{s}");
     }
     let q = glib::Uri::escape_string(s, None, false);
-    format!("https://duckduckgo.com/?q={q}")
+    format!("https://www.google.com/search?q={q}")
 }
