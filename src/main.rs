@@ -1,5 +1,7 @@
 mod adblock;
 mod browser;
+mod db;
+mod session;
 mod wheel;
 
 use adw::prelude::*;

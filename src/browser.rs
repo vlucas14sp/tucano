@@ -14,6 +14,11 @@ const DISCARD_SECS_DEFAULT: u64 = 300;
 /// Estado de atividade por aba: último acesso e, se suspensa, a URL para restaurar.
 type Activity = Rc<RefCell<HashMap<usize, (Instant, Option<String>)>>>;
 
+thread_local! {
+    /// Botão de favorito do cabeçalho, para refletir o estado da página atual.
+    static STAR: RefCell<Option<gtk::Button>> = const { RefCell::new(None) };
+}
+
 /// Página inicial / motor de busca padrão.
 const HOME: &str = "https://www.google.com";
 
@@ -29,6 +34,13 @@ pub fn build_window(app: &adw::Application) {
     forward_btn.set_sensitive(false);
     let reload_btn = gtk::Button::from_icon_name("view-refresh-symbolic");
     let new_tab_btn = gtk::Button::from_icon_name("tab-new-symbolic");
+
+    let star_btn = gtk::Button::from_icon_name("non-starred-symbolic");
+    star_btn.set_tooltip_text(Some("Adicionar aos favoritos"));
+    star_btn.set_sensitive(false);
+    let library_btn = gtk::MenuButton::new();
+    library_btn.set_icon_name("view-list-symbolic");
+    library_btn.set_tooltip_text(Some("Favoritos e histórico"));
 
     let nav_box = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     nav_box.add_css_class("linked");
@@ -48,6 +60,8 @@ pub fn build_window(app: &adw::Application) {
     header.pack_start(&reload_btn);
     header.set_title_widget(Some(&url_entry));
     header.pack_end(&new_tab_btn);
+    header.pack_end(&library_btn);
+    header.pack_end(&star_btn);
 
     // Abas ficam ocultas no topo; o gerenciamento é feito pela roda flutuante.
     let content = gtk::Overlay::new();
@@ -89,14 +103,30 @@ pub fn build_window(app: &adw::Application) {
         #[weak] tab_view, #[weak] back_btn, #[weak] forward_btn,
         move |entry| {
             let uri = normalize_url(&entry.text());
-            match current_webview(&tab_view) {
-                Some(wv) => wv.load_uri(&uri),
-                None => if let Some(c) = current_container(&tab_view) {
-                    open_in_container(&c, &uri, &tab_view, entry, &back_btn, &forward_btn);
+            navigate(&tab_view, entry, &back_btn, &forward_btn, &uri);
+        }
+    ));
+
+    // Disponibiliza o botão de favorito para os demais pontos da UI.
+    STAR.with(|cell| *cell.borrow_mut() = Some(star_btn.clone()));
+
+    // Estrela: adiciona/remove a página atual dos favoritos.
+    star_btn.connect_clicked(glib::clone!(
+        #[weak] tab_view,
+        move |_| {
+            if let Some(wv) = current_webview(&tab_view) {
+                let url = wv.uri().unwrap_or_default();
+                if !url.is_empty() {
+                    let title = wv.title().unwrap_or_default();
+                    crate::db::toggle_bookmark(&url, &title);
+                    update_star(&tab_view);
                 }
             }
         }
     ));
+
+    // Menu de favoritos e histórico.
+    build_library(&library_btn, &tab_view, &url_entry, &back_btn, &forward_btn);
 
     // Estado de atividade das abas (para suspender as inativas).
     let activity: Activity = Rc::new(RefCell::new(HashMap::new()));
@@ -271,9 +301,10 @@ fn open_in_container(
         container.remove(&child);
     }
 
-    // Compartilha o gerenciador de conteúdo (bloqueador) entre todas as abas.
+    // Compartilha o bloqueador e a sessão persistente (cookies/login) entre abas.
     let webview = WebView::builder()
         .user_content_manager(&crate::adblock::content_manager())
+        .network_session(&crate::session::session())
         .build();
     webview.set_hexpand(true);
     webview.set_vexpand(true);
@@ -311,6 +342,7 @@ fn wire_webview(
         #[weak] tab_view, #[weak] url_entry,
         move |wv| if is_current(&tab_view, wv) {
             url_entry.set_text(&wv.uri().unwrap_or_default());
+            update_star(&tab_view);
         }
     ));
 
@@ -326,6 +358,12 @@ fn wire_webview(
         #[weak] tab_view, #[weak] url_entry, #[weak] back_btn, #[weak] forward_btn, #[weak] page,
         move |wv, event| {
             page.set_loading(event != webkit::LoadEvent::Finished);
+            if event == webkit::LoadEvent::Finished {
+                // Registra a visita no histórico.
+                let url = wv.uri().unwrap_or_default();
+                let title = wv.title().unwrap_or_default();
+                crate::db::record_visit(&url, &title);
+            }
             if is_current(&tab_view, wv) {
                 if event == webkit::LoadEvent::Finished {
                     url_entry.set_progress_fraction(0.0);
@@ -446,10 +484,152 @@ fn on_select(
             // Recria o WebView e recarrega a página suspensa.
             open_in_container(&container, &url, tab_view, url_entry, back_btn, forward_btn);
         }
+        update_star(tab_view);
         return;
     }
 
     sync_chrome(tab_view, url_entry, back_btn, forward_btn);
+    update_star(tab_view);
+}
+
+/// Navega na aba atual; se ela ainda estiver na página de início, abre ali.
+fn navigate(
+    tab_view: &adw::TabView,
+    url_entry: &gtk::Entry,
+    back_btn: &gtk::Button,
+    forward_btn: &gtk::Button,
+    url: &str,
+) {
+    match current_webview(tab_view) {
+        Some(wv) => wv.load_uri(url),
+        None => {
+            if let Some(c) = current_container(tab_view) {
+                open_in_container(&c, url, tab_view, url_entry, back_btn, forward_btn);
+            }
+        }
+    }
+}
+
+/// Atualiza o ícone da estrela conforme a página atual estar (ou não) favoritada.
+fn update_star(tab_view: &adw::TabView) {
+    STAR.with(|cell| {
+        let borrow = cell.borrow();
+        let Some(star) = borrow.as_ref() else {
+            return;
+        };
+        let url = current_webview(tab_view)
+            .and_then(|wv| wv.uri())
+            .map(|s| s.to_string())
+            .unwrap_or_default();
+        if url.is_empty() {
+            star.set_sensitive(false);
+            star.set_icon_name("non-starred-symbolic");
+            return;
+        }
+        star.set_sensitive(true);
+        if crate::db::is_bookmarked(&url) {
+            star.set_icon_name("starred-symbolic");
+            star.set_tooltip_text(Some("Remover dos favoritos"));
+        } else {
+            star.set_icon_name("non-starred-symbolic");
+            star.set_tooltip_text(Some("Adicionar aos favoritos"));
+        }
+    });
+}
+
+/// Monta o menu (popover) de favoritos e histórico, recarregado ao abrir.
+fn build_library(
+    menu_btn: &gtk::MenuButton,
+    tab_view: &adw::TabView,
+    url_entry: &gtk::Entry,
+    back_btn: &gtk::Button,
+    forward_btn: &gtk::Button,
+) {
+    let list = gtk::Box::new(gtk::Orientation::Vertical, 6);
+    list.set_margin_top(6);
+    list.set_margin_bottom(6);
+    list.set_margin_start(6);
+    list.set_margin_end(6);
+
+    let scroller = gtk::ScrolledWindow::builder()
+        .hscrollbar_policy(gtk::PolicyType::Never)
+        .max_content_height(480)
+        .propagate_natural_height(true)
+        .child(&list)
+        .build();
+
+    let popover = gtk::Popover::new();
+    popover.set_child(Some(&scroller));
+    popover.set_size_request(360, -1);
+    menu_btn.set_popover(Some(&popover));
+
+    menu_btn.connect_active_notify(glib::clone!(
+        #[weak] list, #[weak] popover, #[weak] tab_view,
+        #[weak] url_entry, #[weak] back_btn, #[weak] forward_btn,
+        move |btn| if btn.is_active() {
+            fill_library(&list, &popover, &tab_view, &url_entry, &back_btn, &forward_btn);
+        }
+    ));
+}
+
+/// Preenche o popover com seções de Favoritos e Histórico recente.
+fn fill_library(
+    list: &gtk::Box,
+    popover: &gtk::Popover,
+    tab_view: &adw::TabView,
+    url_entry: &gtk::Entry,
+    back_btn: &gtk::Button,
+    forward_btn: &gtk::Button,
+) {
+    while let Some(child) = list.first_child() {
+        list.remove(&child);
+    }
+    add_section(list, "Favoritos", crate::db::bookmarks(), popover, tab_view, url_entry, back_btn, forward_btn);
+    add_section(list, "Histórico recente", crate::db::recent_history(50), popover, tab_view, url_entry, back_btn, forward_btn);
+}
+
+#[allow(clippy::too_many_arguments)]
+fn add_section(
+    list: &gtk::Box,
+    title: &str,
+    items: Vec<(String, String)>,
+    popover: &gtk::Popover,
+    tab_view: &adw::TabView,
+    url_entry: &gtk::Entry,
+    back_btn: &gtk::Button,
+    forward_btn: &gtk::Button,
+) {
+    let header = gtk::Label::new(Some(title));
+    header.set_xalign(0.0);
+    header.add_css_class("heading");
+    header.set_margin_top(4);
+    list.append(&header);
+
+    if items.is_empty() {
+        let empty = gtk::Label::new(Some("Vazio"));
+        empty.set_xalign(0.0);
+        empty.add_css_class("dim-label");
+        list.append(&empty);
+        return;
+    }
+
+    for (url, label) in items {
+        let lbl = gtk::Label::new(Some(&label));
+        lbl.set_xalign(0.0);
+        lbl.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        lbl.set_max_width_chars(42);
+
+        let row = gtk::Button::builder().child(&lbl).css_classes(["flat"]).build();
+        row.set_tooltip_text(Some(&url));
+        row.connect_clicked(glib::clone!(
+            #[weak] popover, #[weak] tab_view, #[weak] url_entry, #[weak] back_btn, #[weak] forward_btn,
+            move |_| {
+                navigate(&tab_view, &url_entry, &back_btn, &forward_btn, &url);
+                popover.popdown();
+            }
+        ));
+        list.append(&row);
+    }
 }
 
 /// Suspende abas em segundo plano paradas há mais de `discard_secs()`:

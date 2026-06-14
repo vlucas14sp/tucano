@@ -20,6 +20,10 @@ Usa o motor **WebKitGTK** (família Safari/WebKit) com **GTK4 + libadwaita**.
 - **Suspensão de abas inativas**: abas em segundo plano paradas são descartadas
   (libera o WebProcess) e recarregadas ao serem selecionadas — economiza muita RAM
   (≈46 MB por aba nos testes)
+- **Sessão persistente**: cookies, cache e armazenamento ficam em disco, então
+  logins sobrevivem entre execuções (perfil único em `~/.local/share/tucano/`)
+- **Histórico e favoritos** em SQLite — estrela no cabeçalho para favoritar e um
+  menu de biblioteca (favoritos + histórico recente)
 
 ## Atalhos de teclado
 
