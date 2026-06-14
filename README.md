@@ -26,6 +26,9 @@ Usa o motor **WebKitGTK** (família Safari/WebKit) com **GTK4 + libadwaita**.
 | `Ctrl+R` / `F5` | Recarregar                  |
 | `Alt+←`       | Voltar                        |
 | `Alt+→`       | Avançar                       |
+| `Ctrl+E`      | Abre/fecha a roda de abas (depois role o mouse para girar) |
+| `Ctrl+Tab`    | Aciona a roda e avança uma aba; solte o `Ctrl` para confirmar |
+| `Ctrl+Shift+Tab` | Aciona a roda e volta uma aba              |
 
 ## Dependências (Fedora)
 

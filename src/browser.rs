@@ -42,7 +42,6 @@ pub fn build_window(app: &adw::Application) {
     let content = gtk::Overlay::new();
     content.set_vexpand(true);
     content.set_child(Some(&tab_view));
-    crate::wheel::attach(&content, &tab_view);
 
     let layout = gtk::Box::new(gtk::Orientation::Vertical, 0);
     layout.append(&header);
@@ -104,6 +103,8 @@ pub fn build_window(app: &adw::Application) {
     ));
 
     register_shortcuts(app, &window, &tab_view, &url_entry, &back_btn, &forward_btn);
+    // A roda de abas e seus atalhos (Ctrl+E, Ctrl+Tab) precisam da janela pronta.
+    crate::wheel::attach(&content, &tab_view, app, &window);
 
     add_tab(&tab_view, &url_entry, &back_btn, &forward_btn);
     window.present();

@@ -28,6 +28,8 @@ struct WheelState {
     target: f64,
     /// Se há uma animação de giro em andamento.
     animating: bool,
+    /// `true` quando a roda foi acionada via Ctrl+Tab (fecha ao soltar o Ctrl).
+    ctrl_cycling: bool,
     items: Vec<(gtk::Button, adw::TabPage)>,
 }
 
@@ -36,8 +38,18 @@ const EASE: f64 = 0.20;
 
 type State = Rc<RefCell<WheelState>>;
 
-/// Adiciona o botão de tucano e a roda como sobreposições do `overlay`.
-pub fn attach(overlay: &gtk::Overlay, tab_view: &adw::TabView) {
+/// Adiciona o botão de tucano e a roda como sobreposições do `overlay`,
+/// e registra os atalhos de teclado que acionam a roda.
+pub fn attach(
+    overlay: &gtk::Overlay,
+    tab_view: &adw::TabView,
+    app: &adw::Application,
+    window: &adw::ApplicationWindow,
+) {
+    // Desativa os atalhos nativos do AdwTabView (Ctrl+Tab etc.) para que a roda
+    // assuma esses gestos.
+    tab_view.set_shortcuts(adw::TabViewShortcuts::empty());
+
     let fixed = gtk::Fixed::new();
     fixed.set_size_request(FIXED_W, FIXED_H);
 
@@ -53,6 +65,7 @@ pub fn attach(overlay: &gtk::Overlay, tab_view: &adw::TabView) {
         rotation: 0.0,
         target: 0.0,
         animating: false,
+        ctrl_cycling: false,
         items: Vec::new(),
     }));
 
@@ -69,6 +82,9 @@ pub fn attach(overlay: &gtk::Overlay, tab_view: &adw::TabView) {
                 if n == 0 {
                     return glib::Propagation::Proceed;
                 }
+                // Ao rolar com o mouse, a roda passa ao modo manual (não fecha
+                // sozinha ao soltar o Ctrl).
+                st.ctrl_cycling = false;
                 st.target = (st.target + dir).clamp(0.0, (n - 1) as f64);
             }
             start_animation(&fixed, &state, &tab_view);
@@ -89,13 +105,7 @@ pub fn attach(overlay: &gtk::Overlay, tab_view: &adw::TabView) {
 
     toucan.connect_clicked(glib::clone!(
         #[strong] state, #[weak] fixed, #[weak] tab_view, #[weak] revealer,
-        move |_| {
-            let show = !revealer.reveals_child();
-            if show {
-                rebuild(&fixed, &state, &tab_view, &revealer);
-            }
-            revealer.set_reveal_child(show);
-        }
+        move |_| toggle_wheel(&fixed, &state, &tab_view, &revealer)
     ));
 
     overlay.add_overlay(&revealer);
@@ -114,6 +124,97 @@ pub fn attach(overlay: &gtk::Overlay, tab_view: &adw::TabView) {
             rebuild(&fixed, &state, tv, &revealer);
         }
     ));
+
+    // --- Atalhos de teclado que acionam a roda ---
+
+    // Ctrl+E: liga/desliga a roda (depois use o scroll para girar).
+    let act_toggle = gio::SimpleAction::new("wheel-toggle", None);
+    act_toggle.connect_activate(glib::clone!(
+        #[weak] fixed, #[strong] state, #[weak] tab_view, #[weak] revealer,
+        move |_, _| toggle_wheel(&fixed, &state, &tab_view, &revealer)
+    ));
+    window.add_action(&act_toggle);
+    app.set_accels_for_action("win.wheel-toggle", &["<Ctrl>e"]);
+
+    // Ctrl+Tab / Ctrl+Shift+Tab: aciona a roda e avança/volta uma aba.
+    let act_next = gio::SimpleAction::new("wheel-next", None);
+    act_next.connect_activate(glib::clone!(
+        #[weak] fixed, #[strong] state, #[weak] tab_view, #[weak] revealer,
+        move |_, _| cycle_wheel(&fixed, &state, &tab_view, &revealer, 1.0)
+    ));
+    window.add_action(&act_next);
+    app.set_accels_for_action("win.wheel-next", &["<Ctrl>Tab"]);
+
+    let act_prev = gio::SimpleAction::new("wheel-prev", None);
+    act_prev.connect_activate(glib::clone!(
+        #[weak] fixed, #[strong] state, #[weak] tab_view, #[weak] revealer,
+        move |_, _| cycle_wheel(&fixed, &state, &tab_view, &revealer, -1.0)
+    ));
+    window.add_action(&act_prev);
+    app.set_accels_for_action(
+        "win.wheel-prev",
+        &["<Ctrl><Shift>Tab", "<Ctrl><Shift>ISO_Left_Tab"],
+    );
+
+    // Soltar o Ctrl fecha a roda quando ela foi acionada via Ctrl+Tab.
+    let key = gtk::EventControllerKey::new();
+    key.set_propagation_phase(gtk::PropagationPhase::Capture);
+    key.connect_key_released(glib::clone!(
+        #[strong] state, #[weak] revealer,
+        move |_, keyval, _code, _mods| {
+            if matches!(keyval, gdk::Key::Control_L | gdk::Key::Control_R)
+                && state.borrow().ctrl_cycling
+            {
+                close_wheel(&state, &revealer);
+            }
+        }
+    ));
+    window.add_controller(key);
+}
+
+/// Abre a roda (reconstruindo os itens) se ainda não estiver visível.
+fn open_wheel(fixed: &gtk::Fixed, state: &State, tab_view: &adw::TabView, revealer: &gtk::Revealer) {
+    if !revealer.reveals_child() {
+        rebuild(fixed, state, tab_view, revealer);
+        revealer.set_reveal_child(true);
+    }
+}
+
+/// Fecha a roda e zera o modo de ciclagem por Ctrl.
+fn close_wheel(state: &State, revealer: &gtk::Revealer) {
+    revealer.set_reveal_child(false);
+    state.borrow_mut().ctrl_cycling = false;
+}
+
+/// Alterna a roda no modo manual (permanece aberta até clicar/alternar de novo).
+fn toggle_wheel(fixed: &gtk::Fixed, state: &State, tab_view: &adw::TabView, revealer: &gtk::Revealer) {
+    if revealer.reveals_child() {
+        close_wheel(state, revealer);
+    } else {
+        state.borrow_mut().ctrl_cycling = false;
+        open_wheel(fixed, state, tab_view, revealer);
+    }
+}
+
+/// Aciona a roda em modo Ctrl+Tab e gira `dir` aba(s) (fecha ao soltar o Ctrl).
+fn cycle_wheel(
+    fixed: &gtk::Fixed,
+    state: &State,
+    tab_view: &adw::TabView,
+    revealer: &gtk::Revealer,
+    dir: f64,
+) {
+    open_wheel(fixed, state, tab_view, revealer);
+    {
+        let mut st = state.borrow_mut();
+        st.ctrl_cycling = true;
+        let n = st.items.len();
+        if n == 0 {
+            return;
+        }
+        st.target = (st.target + dir).clamp(0.0, (n - 1) as f64);
+    }
+    start_animation(fixed, state, tab_view);
 }
 
 /// Inicia (se já não houver) a animação de giro rumo ao `target`.
