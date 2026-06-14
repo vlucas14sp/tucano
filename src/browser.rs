@@ -355,6 +355,8 @@ fn tune_settings(webview: &WebView) {
         return;
     };
     s.set_enable_mediasource(true); // MSE — necessário para o player do YouTube
+    s.set_enable_encrypted_media(true); // EME (DRM) — exige um CDM Widevine no WebKitGTK
+    s.set_enable_media_capabilities(true); // API que os streamings usam p/ negociar codec/DRM
     s.set_enable_webgl(true);
     s.set_enable_smooth_scrolling(true);
     s.set_media_playback_requires_user_gesture(false);
