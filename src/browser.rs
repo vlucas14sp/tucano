@@ -1,5 +1,5 @@
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::time::Instant;
 
@@ -41,6 +41,9 @@ pub fn build_window(app: &adw::Application) {
     let library_btn = gtk::MenuButton::new();
     library_btn.set_icon_name("view-list-symbolic");
     library_btn.set_tooltip_text(Some("Favoritos e histórico"));
+    let downloads_btn = gtk::MenuButton::new();
+    downloads_btn.set_icon_name("folder-download-symbolic");
+    downloads_btn.set_tooltip_text(Some("Downloads"));
 
     let nav_box = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     nav_box.add_css_class("linked");
@@ -60,8 +63,12 @@ pub fn build_window(app: &adw::Application) {
     header.pack_start(&reload_btn);
     header.set_title_widget(Some(&url_entry));
     header.pack_end(&new_tab_btn);
+    header.pack_end(&downloads_btn);
     header.pack_end(&library_btn);
     header.pack_end(&star_btn);
+
+    // Barra de busca na página (Ctrl+F), entre o cabeçalho e o conteúdo.
+    let search_bar = gtk::SearchBar::new();
 
     // Abas ficam ocultas no topo; o gerenciamento é feito pela roda flutuante.
     let content = gtk::Overlay::new();
@@ -70,6 +77,7 @@ pub fn build_window(app: &adw::Application) {
 
     let layout = gtk::Box::new(gtk::Orientation::Vertical, 0);
     layout.append(&header);
+    layout.append(&search_bar);
     layout.append(&content);
 
     let window = adw::ApplicationWindow::builder()
@@ -128,6 +136,9 @@ pub fn build_window(app: &adw::Application) {
     // Menu de favoritos e histórico.
     build_library(&library_btn, &tab_view, &url_entry, &back_btn, &forward_btn);
 
+    // Autocomplete da barra de endereço com histórico + favoritos.
+    setup_completion(&url_entry, &tab_view, &back_btn, &forward_btn);
+
     // Estado de atividade das abas (para suspender as inativas).
     let activity: Activity = Rc::new(RefCell::new(HashMap::new()));
 
@@ -149,6 +160,9 @@ pub fn build_window(app: &adw::Application) {
     register_shortcuts(app, &window, &tab_view, &url_entry, &back_btn, &forward_btn);
     // A roda de abas e seus atalhos (Ctrl+E, Ctrl+Tab) precisam da janela pronta.
     crate::wheel::attach(&content, &tab_view, app, &window);
+    // Localizar na página (Ctrl+F) e downloads.
+    crate::find::wire(&search_bar, &tab_view, app, &window);
+    crate::downloads::attach(&downloads_btn);
 
     // Verifica periodicamente e suspende abas em segundo plano paradas.
     glib::timeout_add_seconds_local(
@@ -385,6 +399,19 @@ fn wire_webview(
     webview.connect_web_process_terminated(|_, reason| {
         eprintln!("[tucano] processo web encerrado: {reason:?}");
     });
+
+    // Respostas que o WebKit não sabe exibir viram download.
+    webview.connect_decide_policy(|_, decision, decision_type| {
+        if decision_type == webkit::PolicyDecisionType::Response {
+            if let Some(resp) = decision.downcast_ref::<webkit::ResponsePolicyDecision>() {
+                if !resp.is_mime_type_supported() {
+                    resp.download();
+                    return true;
+                }
+            }
+        }
+        false
+    });
 }
 
 /// Ajusta as configurações do WebView (mídia/MSE, WebGL e User-Agent moderno).
@@ -414,7 +441,7 @@ fn current_container(tab_view: &adw::TabView) -> Option<gtk::Box> {
 }
 
 /// WebView da aba selecionada — `None` se a aba ainda está na página de início.
-fn current_webview(tab_view: &adw::TabView) -> Option<WebView> {
+pub(crate) fn current_webview(tab_view: &adw::TabView) -> Option<WebView> {
     current_container(tab_view)
         .and_then(|c| c.first_child())
         .and_then(|child| child.downcast::<WebView>().ok())
@@ -506,6 +533,68 @@ fn navigate(
             if let Some(c) = current_container(tab_view) {
                 open_in_container(&c, url, tab_view, url_entry, back_btn, forward_btn);
             }
+        }
+    }
+}
+
+/// Configura o autocomplete da barra de endereço a partir do histórico/favoritos.
+#[allow(deprecated)]
+fn setup_completion(
+    url_entry: &gtk::Entry,
+    tab_view: &adw::TabView,
+    back_btn: &gtk::Button,
+    forward_btn: &gtk::Button,
+) {
+    // Colunas: 0 = URL (texto inserido), 1 = rótulo (título) para casar a busca.
+    let store = gtk::ListStore::new(&[glib::Type::STRING, glib::Type::STRING]);
+
+    let completion = gtk::EntryCompletion::new();
+    completion.set_model(Some(&store));
+    completion.set_text_column(0);
+    completion.set_minimum_key_length(1);
+    completion.set_match_func(|c, key, iter| {
+        let Some(model) = c.model() else {
+            return false;
+        };
+        let url = model.get::<String>(iter, 0).to_lowercase();
+        let label = model.get::<String>(iter, 1).to_lowercase();
+        let key = key.to_lowercase();
+        url.contains(&key) || label.contains(&key)
+    });
+    url_entry.set_completion(Some(&completion));
+
+    // Ao escolher uma sugestão, navega direto.
+    completion.connect_match_selected(glib::clone!(
+        #[weak] tab_view, #[weak] url_entry, #[weak] back_btn, #[weak] forward_btn,
+        #[upgrade_or] glib::Propagation::Stop,
+        move |_, model, iter| {
+            let url = model.get::<String>(iter, 0);
+            url_entry.set_text(&url);
+            navigate(&tab_view, &url_entry, &back_btn, &forward_btn, &url);
+            glib::Propagation::Stop
+        }
+    ));
+
+    // Atualiza a lista ao focar a barra (pega o histórico mais recente).
+    let focus = gtk::EventControllerFocus::new();
+    focus.connect_enter(glib::clone!(
+        #[weak] store,
+        move |_| refresh_completion(&store)
+    ));
+    url_entry.add_controller(focus);
+    refresh_completion(&store);
+}
+
+#[allow(deprecated)]
+fn refresh_completion(store: &gtk::ListStore) {
+    store.clear();
+    let mut seen = HashSet::new();
+    for (url, label) in crate::db::bookmarks()
+        .into_iter()
+        .chain(crate::db::recent_history(300))
+    {
+        if seen.insert(url.clone()) {
+            store.insert_with_values(None, &[(0, &url), (1, &label)]);
         }
     }
 }

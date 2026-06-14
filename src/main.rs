@@ -1,6 +1,8 @@
 mod adblock;
 mod browser;
 mod db;
+mod downloads;
+mod find;
 mod session;
 mod wheel;
 

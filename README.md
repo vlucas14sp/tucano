@@ -24,6 +24,9 @@ Usa o motor **WebKitGTK** (família Safari/WebKit) com **GTK4 + libadwaita**.
   logins sobrevivem entre execuções (perfil único em `~/.local/share/tucano/`)
 - **Histórico e favoritos** em SQLite — estrela no cabeçalho para favoritar e um
   menu de biblioteca (favoritos + histórico recente)
+- **Autocomplete da barra de endereço** a partir do histórico e favoritos
+- **Localizar na página** (Ctrl+F) com próximo/anterior
+- **Downloads** para `~/Downloads`, com progresso e botão de abrir
 
 ## Atalhos de teclado
 
@@ -33,6 +36,7 @@ Usa o motor **WebKitGTK** (família Safari/WebKit) com **GTK4 + libadwaita**.
 | `Ctrl+W`      | Fechar aba                    |
 | `Ctrl+L`      | Focar a barra de endereço     |
 | `Ctrl+R` / `F5` | Recarregar                  |
+| `Ctrl+F`      | Localizar na página           |
 | `Alt+←`       | Voltar                        |
 | `Alt+→`       | Avançar                       |
 | `Ctrl+E`      | Abre/fecha a roda de abas (depois role o mouse para girar) |
