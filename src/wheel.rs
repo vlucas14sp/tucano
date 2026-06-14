@@ -131,7 +131,8 @@ fn rebuild(fixed: &gtk::Fixed, state: &State, tab_view: &adw::TabView, revealer:
         btn.connect_clicked(glib::clone!(
             #[strong] state, #[weak] fixed, #[weak] tab_view, #[weak] revealer, #[strong] page,
             move |_| {
-                if let Some(pos) = state.borrow().items.iter().position(|(_, p)| p == &page) {
+                let pos = state.borrow().items.iter().position(|(_, p)| p == &page);
+                if let Some(pos) = pos {
                     state.borrow_mut().rotation = pos as f64;
                 }
                 reposition(&fixed, &state.borrow(), &tab_view);
