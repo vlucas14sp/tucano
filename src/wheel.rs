@@ -22,10 +22,17 @@ const ITEM_W: f64 = 220.0;
 const ITEM_H: f64 = 40.0;
 
 struct WheelState {
-    /// Índice (fracionário) da aba centralizada; muda com o scroll.
+    /// Posição (fracionária) exibida no momento; interpolada a cada frame.
     rotation: f64,
+    /// Índice de destino para onde a roda está girando.
+    target: f64,
+    /// Se há uma animação de giro em andamento.
+    animating: bool,
     items: Vec<(gtk::Button, adw::TabPage)>,
 }
+
+/// Fração interpolada por frame (ease-out): quanto maior, mais rápido o giro.
+const EASE: f64 = 0.20;
 
 type State = Rc<RefCell<WheelState>>;
 
@@ -44,6 +51,8 @@ pub fn attach(overlay: &gtk::Overlay, tab_view: &adw::TabView) {
 
     let state: State = Rc::new(RefCell::new(WheelState {
         rotation: 0.0,
+        target: 0.0,
+        animating: false,
         items: Vec::new(),
     }));
 
@@ -60,9 +69,9 @@ pub fn attach(overlay: &gtk::Overlay, tab_view: &adw::TabView) {
                 if n == 0 {
                     return glib::Propagation::Proceed;
                 }
-                st.rotation = (st.rotation + dir).clamp(0.0, (n - 1) as f64);
+                st.target = (st.target + dir).clamp(0.0, (n - 1) as f64);
             }
-            reposition(&fixed, &state.borrow(), &tab_view);
+            start_animation(&fixed, &state, &tab_view);
             glib::Propagation::Stop
         }
     ));
@@ -107,6 +116,40 @@ pub fn attach(overlay: &gtk::Overlay, tab_view: &adw::TabView) {
     ));
 }
 
+/// Inicia (se já não houver) a animação de giro rumo ao `target`.
+fn start_animation(fixed: &gtk::Fixed, state: &State, tab_view: &adw::TabView) {
+    {
+        let mut st = state.borrow_mut();
+        if st.animating {
+            return; // a animação em curso já seguirá o novo alvo
+        }
+        st.animating = true;
+    }
+    fixed.add_tick_callback(glib::clone!(
+        #[strong] state, #[weak] tab_view,
+        #[upgrade_or] glib::ControlFlow::Break,
+        move |fixed, _clock| {
+            let (rotation, target) = {
+                let st = state.borrow();
+                (st.rotation, st.target)
+            };
+            let diff = target - rotation;
+            if diff.abs() < 0.002 {
+                {
+                    let mut st = state.borrow_mut();
+                    st.rotation = target;
+                    st.animating = false;
+                }
+                reposition(fixed, &state.borrow(), &tab_view);
+                return glib::ControlFlow::Break;
+            }
+            state.borrow_mut().rotation += diff * EASE;
+            reposition(fixed, &state.borrow(), &tab_view);
+            glib::ControlFlow::Continue
+        }
+    ));
+}
+
 /// Recria os botões da roda a partir das abas atuais e centraliza na ativa.
 fn rebuild(fixed: &gtk::Fixed, state: &State, tab_view: &adw::TabView, revealer: &gtk::Revealer) {
     for (btn, _) in state.borrow_mut().items.drain(..) {
@@ -133,7 +176,9 @@ fn rebuild(fixed: &gtk::Fixed, state: &State, tab_view: &adw::TabView, revealer:
             move |_| {
                 let pos = state.borrow().items.iter().position(|(_, p)| p == &page);
                 if let Some(pos) = pos {
-                    state.borrow_mut().rotation = pos as f64;
+                    let mut st = state.borrow_mut();
+                    st.rotation = pos as f64;
+                    st.target = pos as f64;
                 }
                 reposition(&fixed, &state.borrow(), &tab_view);
                 tab_view.set_selected_page(&page);
@@ -145,7 +190,11 @@ fn rebuild(fixed: &gtk::Fixed, state: &State, tab_view: &adw::TabView, revealer:
     }
 
     if let Some(sel) = tab_view.selected_page() {
-        state.borrow_mut().rotation = tab_view.page_position(&sel) as f64;
+        let pos = tab_view.page_position(&sel) as f64;
+        let mut st = state.borrow_mut();
+        st.rotation = pos;
+        st.target = pos;
+        st.animating = false;
     }
     reposition(fixed, &state.borrow(), tab_view);
 }
@@ -178,7 +227,9 @@ fn reposition(fixed: &gtk::Fixed, st: &WheelState, tab_view: &adw::TabView) {
 
     let idx = st.rotation.round() as usize;
     if let Some((_, page)) = st.items.get(idx) {
-        tab_view.set_selected_page(page);
+        if tab_view.selected_page().as_ref() != Some(page) {
+            tab_view.set_selected_page(page);
+        }
     }
 }
 
