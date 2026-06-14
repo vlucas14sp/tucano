@@ -1,4 +1,5 @@
 mod browser;
+mod wheel;
 
 use adw::prelude::*;
 use gtk::glib;

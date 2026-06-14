@@ -38,12 +38,15 @@ pub fn build_window(app: &adw::Application) {
     header.set_title_widget(Some(&url_entry));
     header.pack_end(&new_tab_btn);
 
-    let tab_bar = adw::TabBar::builder().view(&tab_view).build();
+    // Abas ficam ocultas no topo; o gerenciamento é feito pela roda flutuante.
+    let content = gtk::Overlay::new();
+    content.set_vexpand(true);
+    content.set_child(Some(&tab_view));
+    crate::wheel::attach(&content, &tab_view);
 
     let layout = gtk::Box::new(gtk::Orientation::Vertical, 0);
     layout.append(&header);
-    layout.append(&tab_bar);
-    layout.append(&tab_view);
+    layout.append(&content);
 
     let window = adw::ApplicationWindow::builder()
         .application(app)

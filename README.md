@@ -5,7 +5,9 @@ Usa o motor **WebKitGTK** (família Safari/WebKit) com **GTK4 + libadwaita**.
 
 ## Funcionalidades
 
-- Abas (`AdwTabView` / `AdwTabBar`)
+- Abas (`AdwTabView`) com **roda radial estilo "seleção de armas"**: a barra de
+  abas fica oculta; um botão flutuante de tucano (centro-esquerda) revela meia-roda
+  de abas que gira com o scroll do mouse, selecionando a aba central ao vivo
 - **Nova aba estilo Arc**: abre uma página de início com uma busca centralizada;
   a página só carrega depois que você digita a URL ou a pesquisa
 - Navegação: voltar, avançar, recarregar
