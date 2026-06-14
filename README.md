@@ -42,6 +42,18 @@ sudo dnf install -y rust cargo gtk4-devel libadwaita-devel webkitgtk6.0-devel
 cargo run --release
 ```
 
+`TUCANO_URL=<url> cargo run` abre direto numa página (útil para depurar).
+
+### Reprodução de vídeo (opcional)
+
+A renderização das páginas usa só o WebKitGTK, mas para **tocar vídeos**
+(YouTube etc.) o WebKitGTK depende dos plugins do GStreamer. Para cobertura
+completa de codecs, instale (via RPM Fusion):
+
+```bash
+sudo dnf install -y gstreamer1-libav gstreamer1-plugins-good gstreamer1-plugins-bad-free
+```
+
 ## Estrutura
 
 | Arquivo          | Papel                                              |

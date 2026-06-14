@@ -4,7 +4,7 @@ use webkit::prelude::*;
 use webkit::WebView;
 
 /// Página inicial / motor de busca padrão.
-const HOME: &str = "https://duckduckgo.com";
+const HOME: &str = "https://google.com";
 
 /// Monta a janela principal e a primeira aba.
 pub fn build_window(app: &adw::Application) {
@@ -107,6 +107,14 @@ pub fn build_window(app: &adw::Application) {
     crate::wheel::attach(&content, &tab_view, app, &window);
 
     add_tab(&tab_view, &url_entry, &back_btn, &forward_btn);
+
+    // Para depuração: TUCANO_URL=<url> abre direto numa página em vez da inicial.
+    if let Ok(url) = std::env::var("TUCANO_URL") {
+        if let Some(c) = current_container(&tab_view) {
+            open_in_container(&c, &url, &tab_view, &url_entry, &back_btn, &forward_btn);
+        }
+    }
+
     window.present();
 }
 
@@ -230,6 +238,7 @@ fn open_in_container(
     let webview = WebView::new();
     webview.set_hexpand(true);
     webview.set_vexpand(true);
+    tune_settings(&webview);
 
     let page = tab_view.page(container);
     page.set_loading(true);
@@ -286,6 +295,35 @@ fn wire_webview(
                 forward_btn.set_sensitive(wv.can_go_forward());
             }
         }
+    ));
+
+    // Reporta falhas reais de carregamento (ignora cancelamentos, que são
+    // normais quando a própria página dispara um redirect/recarregamento).
+    webview.connect_load_failed(|_, _event, uri, error| {
+        if !error.matches(webkit::NetworkError::Cancelled) {
+            eprintln!("[tucano] falha ao carregar {uri}: {}", error.message());
+        }
+        false // deixa o WebKit exibir sua página de erro padrão
+    });
+    webview.connect_web_process_terminated(|_, reason| {
+        eprintln!("[tucano] processo web encerrado: {reason:?}");
+    });
+}
+
+/// Ajusta as configurações do WebView (mídia/MSE, WebGL e User-Agent moderno).
+fn tune_settings(webview: &WebView) {
+    let Some(s) = webkit::prelude::WebViewExt::settings(webview) else {
+        return;
+    };
+    s.set_enable_mediasource(true); // MSE — necessário para o player do YouTube
+    s.set_enable_webgl(true);
+    s.set_enable_smooth_scrolling(true);
+    s.set_media_playback_requires_user_gesture(false);
+    // User-Agent de desktop limpo (Safari), evita que alguns sites tratem o
+    // navegador como desconhecido.
+    s.set_user_agent(Some(
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/605.1.15 (KHTML, like Gecko) \
+         Version/17.0 Safari/605.1.15",
     ));
 }
 
