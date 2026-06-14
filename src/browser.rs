@@ -1,7 +1,18 @@
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::rc::Rc;
+use std::time::Instant;
+
 use adw::prelude::*;
 use gtk::{gio, glib};
 use webkit::prelude::*;
 use webkit::WebView;
+
+/// Tempo (s) de inatividade até uma aba em segundo plano ser suspensa.
+const DISCARD_SECS_DEFAULT: u64 = 300;
+
+/// Estado de atividade por aba: último acesso e, se suspensa, a URL para restaurar.
+type Activity = Rc<RefCell<HashMap<usize, (Instant, Option<String>)>>>;
 
 /// Página inicial / motor de busca padrão.
 const HOME: &str = "https://www.google.com";
@@ -87,10 +98,13 @@ pub fn build_window(app: &adw::Application) {
         }
     ));
 
-    // Trocar de aba sincroniza barra de endereço e botões.
+    // Estado de atividade das abas (para suspender as inativas).
+    let activity: Activity = Rc::new(RefCell::new(HashMap::new()));
+
+    // Trocar de aba sincroniza a barra e restaura a aba se ela estava suspensa.
     tab_view.connect_selected_page_notify(glib::clone!(
-        #[weak] url_entry, #[weak] back_btn, #[weak] forward_btn,
-        move |tv| sync_chrome(tv, &url_entry, &back_btn, &forward_btn)
+        #[weak] url_entry, #[weak] back_btn, #[weak] forward_btn, #[strong] activity,
+        move |tv| on_select(tv, &url_entry, &back_btn, &forward_btn, &activity)
     ));
     // Fechar a última aba fecha a janela.
     tab_view.connect_close_page(glib::clone!(
@@ -106,12 +120,34 @@ pub fn build_window(app: &adw::Application) {
     // A roda de abas e seus atalhos (Ctrl+E, Ctrl+Tab) precisam da janela pronta.
     crate::wheel::attach(&content, &tab_view, app, &window);
 
+    // Verifica periodicamente e suspende abas em segundo plano paradas.
+    glib::timeout_add_seconds_local(
+        30,
+        glib::clone!(
+            #[weak] tab_view, #[strong] activity,
+            #[upgrade_or] glib::ControlFlow::Break,
+            move || {
+                discard_inactive(&tab_view, &activity);
+                glib::ControlFlow::Continue
+            }
+        ),
+    );
+
     add_tab(&tab_view, &url_entry, &back_btn, &forward_btn);
 
-    // Para depuração: TUCANO_URL=<url> abre direto numa página em vez da inicial.
-    if let Ok(url) = std::env::var("TUCANO_URL") {
-        if let Some(c) = current_container(&tab_view) {
-            open_in_container(&c, &url, &tab_view, &url_entry, &back_btn, &forward_btn);
+    // Para depuração: TUCANO_URL=<url[,url2,...]> abre direto essas páginas.
+    if let Ok(urls) = std::env::var("TUCANO_URL") {
+        let mut parts = urls.split(',').map(str::trim).filter(|s| !s.is_empty());
+        if let Some(first) = parts.next() {
+            if let Some(c) = current_container(&tab_view) {
+                open_in_container(&c, first, &tab_view, &url_entry, &back_btn, &forward_btn);
+            }
+            for u in parts {
+                add_tab(&tab_view, &url_entry, &back_btn, &forward_btn);
+                if let Some(c) = current_container(&tab_view) {
+                    open_in_container(&c, u, &tab_view, &url_entry, &back_btn, &forward_btn);
+                }
+            }
         }
     }
 
@@ -235,7 +271,10 @@ fn open_in_container(
         container.remove(&child);
     }
 
-    let webview = WebView::new();
+    // Compartilha o gerenciador de conteúdo (bloqueador) entre todas as abas.
+    let webview = WebView::builder()
+        .user_content_manager(&crate::adblock::content_manager())
+        .build();
     webview.set_hexpand(true);
     webview.set_vexpand(true);
     tune_settings(&webview);
@@ -365,6 +404,122 @@ fn sync_chrome(
             forward_btn.set_sensitive(false);
         }
     }
+}
+
+/// Chave estável de uma aba enquanto ela existe (ponteiro do objeto).
+fn page_key(page: &adw::TabPage) -> usize {
+    page.as_ptr() as usize
+}
+
+fn discard_secs() -> u64 {
+    std::env::var("TUCANO_DISCARD_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(DISCARD_SECS_DEFAULT)
+}
+
+/// Ao selecionar uma aba: marca como ativa, restaura se estava suspensa e
+/// sincroniza a barra de endereço/botões.
+fn on_select(
+    tab_view: &adw::TabView,
+    url_entry: &gtk::Entry,
+    back_btn: &gtk::Button,
+    forward_btn: &gtk::Button,
+    activity: &Activity,
+) {
+    let Some(page) = tab_view.selected_page() else {
+        sync_chrome(tab_view, url_entry, back_btn, forward_btn);
+        return;
+    };
+
+    let discarded_url = {
+        let mut act = activity.borrow_mut();
+        let entry = act.entry(page_key(&page)).or_insert((Instant::now(), None));
+        entry.0 = Instant::now();
+        entry.1.take()
+    };
+
+    if let Some(url) = discarded_url {
+        if let Ok(container) = page.child().downcast::<gtk::Box>() {
+            // Recria o WebView e recarrega a página suspensa.
+            open_in_container(&container, &url, tab_view, url_entry, back_btn, forward_btn);
+        }
+        return;
+    }
+
+    sync_chrome(tab_view, url_entry, back_btn, forward_btn);
+}
+
+/// Suspende abas em segundo plano paradas há mais de `discard_secs()`:
+/// remove o WebView (liberando o WebProcess) e deixa um marcador no lugar.
+fn discard_inactive(tab_view: &adw::TabView, activity: &Activity) {
+    let Some(selected) = tab_view.selected_page() else {
+        return;
+    };
+    let selected_key = page_key(&selected);
+    let now = Instant::now();
+    let limit = discard_secs();
+    let mut act = activity.borrow_mut();
+
+    for i in 0..tab_view.n_pages() {
+        let page = tab_view.nth_page(i);
+        let key = page_key(&page);
+        let entry = act.entry(key).or_insert((now, None));
+
+        if key == selected_key {
+            entry.0 = now; // a aba ativa nunca é suspensa
+            continue;
+        }
+        if entry.1.is_some() {
+            continue; // já suspensa
+        }
+        if now.duration_since(entry.0).as_secs() < limit {
+            continue;
+        }
+
+        let Ok(container) = page.child().downcast::<gtk::Box>() else {
+            continue;
+        };
+        let Some(child) = container.first_child() else {
+            continue;
+        };
+        let Ok(webview) = child.downcast::<WebView>() else {
+            continue; // página de início, nada a suspender
+        };
+        let url = webview.uri().map(|s| s.to_string()).unwrap_or_default();
+        if url.is_empty() {
+            continue;
+        }
+
+        container.remove(&webview); // descarta o WebView → libera o WebProcess
+        container.append(&suspended_placeholder());
+        eprintln!("[tucano] aba suspensa: {url}");
+        entry.1 = Some(url);
+        page.set_loading(false);
+    }
+}
+
+/// Marcador exibido no lugar de uma aba suspensa.
+fn suspended_placeholder() -> gtk::Box {
+    let b = gtk::Box::new(gtk::Orientation::Vertical, 8);
+    b.set_halign(gtk::Align::Center);
+    b.set_valign(gtk::Align::Center);
+    b.set_hexpand(true);
+    b.set_vexpand(true);
+
+    let icon = gtk::Image::from_icon_name("content-loading-symbolic");
+    icon.set_pixel_size(48);
+    icon.set_opacity(0.5);
+
+    let label = gtk::Label::new(Some(
+        "Aba suspensa para poupar memória\nSelecione-a para recarregar",
+    ));
+    label.set_justify(gtk::Justification::Center);
+    label.add_css_class("dim-label");
+
+    b.append(&icon);
+    b.append(&label);
+    b
 }
 
 /// Transforma o texto digitado em URL: respeita esquemas, completa domínios

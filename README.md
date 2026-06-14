@@ -15,6 +15,11 @@ Usa o motor **WebKitGTK** (família Safari/WebKit) com **GTK4 + libadwaita**.
 - Indicador de progresso de carregamento na barra de endereço
 - Título e spinner por aba
 - Atalhos de teclado
+- **Bloqueador de conteúdo** nativo (filtro do WebKit) contra anúncios/trackers —
+  menos CPU, rede e memória
+- **Suspensão de abas inativas**: abas em segundo plano paradas são descartadas
+  (libera o WebProcess) e recarregadas ao serem selecionadas — economiza muita RAM
+  (≈46 MB por aba nos testes)
 
 ## Atalhos de teclado
 

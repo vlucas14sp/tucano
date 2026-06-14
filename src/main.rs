@@ -1,3 +1,4 @@
+mod adblock;
 mod browser;
 mod wheel;
 
