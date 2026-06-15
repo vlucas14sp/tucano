@@ -760,6 +760,12 @@ fn discard_inactive(tab_view: &adw::TabView, activity: &Activity) {
         let Ok(webview) = child.downcast::<WebView>() else {
             continue; // página de início, nada a suspender
         };
+        // Aba tocando áudio/vídeo nunca é suspensa: renova o cronômetro para
+        // que a reprodução continue em segundo plano.
+        if webview.is_playing_audio() {
+            entry.0 = now;
+            continue;
+        }
         let url = webview.uri().map(|s| s.to_string()).unwrap_or_default();
         if url.is_empty() {
             continue;
