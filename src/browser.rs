@@ -425,11 +425,14 @@ fn tune_settings(webview: &WebView) {
     s.set_enable_webgl(true);
     s.set_enable_smooth_scrolling(true);
     s.set_media_playback_requires_user_gesture(false);
-    // User-Agent de desktop limpo (Safari), evita que alguns sites tratem o
-    // navegador como desconhecido.
+    // Renderiza/compõe sempre pela GPU — vídeo e rolagem ficam mais fluidos.
+    s.set_hardware_acceleration_policy(webkit::HardwareAccelerationPolicy::Always);
+    // User-Agent de Firefox no Linux: faz o YouTube (e afins) entregar VP9/AV1,
+    // que esta GPU decodifica por hardware (VA-API). Com um UA de Safari o
+    // YouTube serve H.264, e sem decodificador VA-API de H.264 a decodificação
+    // cai para a CPU e o vídeo trava.
     s.set_user_agent(Some(
-        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/605.1.15 (KHTML, like Gecko) \
-         Version/17.0 Safari/605.1.15",
+        "Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0",
     ));
 }
 
