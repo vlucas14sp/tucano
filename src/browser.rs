@@ -715,6 +715,11 @@ fn add_section(
         lbl.set_xalign(0.0);
         lbl.set_ellipsize(gtk::pango::EllipsizeMode::End);
         lbl.set_max_width_chars(42);
+        // Botão herda peso em negrito do tema; os itens ficam em peso normal
+        // (só os títulos de seção, com a classe "heading", permanecem em negrito).
+        let attrs = gtk::pango::AttrList::new();
+        attrs.insert(gtk::pango::AttrInt::new_weight(gtk::pango::Weight::Normal));
+        lbl.set_attributes(Some(&attrs));
 
         let row = gtk::Button::builder().child(&lbl).css_classes(["flat"]).build();
         row.set_tooltip_text(Some(&url));
