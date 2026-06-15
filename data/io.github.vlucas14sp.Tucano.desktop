@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Application
+Name=Tucano
+GenericName=Web Browser
+GenericName[pt_BR]=Navegador Web
+Comment=Browse the web
+Comment[pt_BR]=Navegue na web
+Exec=tucano %U
+Icon=io.github.vlucas14sp.Tucano
+Terminal=false
+Categories=Network;WebBrowser;GTK;GNOME;
+Keywords=web;browser;internet;navegador;web;
+StartupNotify=true
+MimeType=text/html;application/xhtml+xml;x-scheme-handler/http;x-scheme-handler/https;

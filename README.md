@@ -67,6 +67,22 @@ completa de codecs, instale (via RPM Fusion):
 sudo dnf install -y gstreamer1-libav gstreamer1-plugins-good gstreamer1-plugins-bad-free
 ```
 
+## Instalar (Fedora)
+
+Instala o binário, o atalho do menu e o ícone em `~/.local` (não precisa de root):
+
+```bash
+make install
+```
+
+Depois é só procurar por **Tucano** nas aplicações. Para remover:
+
+```bash
+make uninstall
+```
+
+Use `make install PREFIX=/usr/local` (com `sudo`) para instalar para todos os usuários.
+
 ## Estrutura
 
 | Arquivo          | Papel                                              |
