@@ -424,6 +424,11 @@ fn tune_settings(webview: &WebView) {
     s.set_enable_media_capabilities(true); // API que os streamings usam p/ negociar codec/DRM
     s.set_enable_webgl(true);
     s.set_enable_smooth_scrolling(true);
+    // Fontes padrão do Fedora para páginas que não especificam família própria.
+    s.set_default_font_family("Noto Sans");
+    s.set_sans_serif_font_family("Noto Sans");
+    s.set_serif_font_family("Noto Serif");
+    s.set_monospace_font_family("Noto Sans Mono");
     s.set_media_playback_requires_user_gesture(false);
     // Renderiza/compõe sempre pela GPU — vídeo e rolagem ficam mais fluidos.
     s.set_hardware_acceleration_policy(webkit::HardwareAccelerationPolicy::Always);
